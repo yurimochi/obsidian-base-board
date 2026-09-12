@@ -470,6 +470,18 @@ export class KanbanView extends BasesView implements HoverParent {
    * are appended at the end so they are never silently hidden.
    */
   public getColumns(): string[] {
+    const dataColumns = this.currentGroups.map((g) =>
+      this.getColumnName(g.key),
+    );
+
+    // Dates are unbounded and short-lived: a board grouped by a date
+    // property always reflects the live data only, in calendar order. A
+    // column with no cards left — including one explicitly created via
+    // "+ Add column" in the past — is dropped instead of persisting forever.
+    if (this.isGroupByDate()) {
+      return this.sortDateColumns(dataColumns);
+    }
+
     // 1. Try .base file config first (new preferred storage)
     const fromConfig = this.config?.get(CONFIG_KEY_COLUMNS) as
       string[] | undefined;
@@ -487,22 +499,9 @@ export class KanbanView extends BasesView implements HoverParent {
       ? rawStored.map((col) => (col === "" ? NO_VALUE_COLUMN : col))
       : null;
 
-    const dataColumns = this.currentGroups.map((g) =>
-      this.getColumnName(g.key),
-    );
-
-    const result =
-      stored && stored.length > 0
-        ? [...stored, ...dataColumns.filter((col) => !stored.includes(col))]
-        : dataColumns;
-
-    // A board grouped by a date property should always read in calendar
-    // order. Without this, a manually reordered/renamed column list (or one
-    // that simply predates a newly-appearing date) would otherwise pile up
-    // new dates at the end instead of slotting them in chronologically.
-    return this.isGroupByDate()
-      ? this.sortDateColumns(result, dataColumns)
-      : result;
+    return stored && stored.length > 0
+      ? [...stored, ...dataColumns.filter((col) => !stored.includes(col))]
+      : dataColumns;
   }
 
   /** True when the groupBy property yields DateValue group keys. */
@@ -516,12 +515,12 @@ export class KanbanView extends BasesView implements HoverParent {
   }
 
   /**
-   * Sort columns chronologically, keeping "(No value)" last. Direction
-   * (ascending vs descending) is inferred from the live, Bases-native
-   * `dataColumns` order rather than reaching into Bases' internal groupBy
-   * config shape.
+   * Sort live date columns chronologically, keeping "(No value)" last.
+   * Direction (ascending vs descending) is inferred from `dataColumns`'
+   * own Bases-native order rather than reaching into Bases' internal
+   * groupBy config shape.
    */
-  private sortDateColumns(columns: string[], dataColumns: string[]): string[] {
+  private sortDateColumns(dataColumns: string[]): string[] {
     const timestamps = dataColumns
       .map((col) => this.dateColumnTimestamp(col))
       .filter((ts) => !Number.isNaN(ts));
@@ -529,7 +528,7 @@ export class KanbanView extends BasesView implements HoverParent {
       timestamps.length >= 2 &&
       timestamps[0] > timestamps[timestamps.length - 1];
 
-    const withoutNoValue = columns.filter((c) => c !== NO_VALUE_COLUMN);
+    const withoutNoValue = dataColumns.filter((c) => c !== NO_VALUE_COLUMN);
     withoutNoValue.sort((a, b) => {
       const tsA = this.dateColumnTimestamp(a);
       const tsB = this.dateColumnTimestamp(b);
@@ -537,7 +536,7 @@ export class KanbanView extends BasesView implements HoverParent {
       return descending ? tsB - tsA : tsA - tsB;
     });
 
-    return columns.includes(NO_VALUE_COLUMN)
+    return dataColumns.includes(NO_VALUE_COLUMN)
       ? [...withoutNoValue, NO_VALUE_COLUMN]
       : withoutNoValue;
   }
