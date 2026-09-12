@@ -608,6 +608,22 @@
   text-overflow: ellipsis;
 }
 
+/* Checkbox-property chip — a real checkbox instead of "true"/"false" text.
+   Editable ones toggle the underlying frontmatter property on click. */
+.base-board-card-chip--checkbox {
+  gap: 5px;
+}
+
+.base-board-card-checkbox {
+  margin: 0;
+  cursor: pointer;
+}
+
+.base-board-card-checkbox:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
 /* Rendered formula output (e.g. a formula using html()) renders inline. Keep
    any block-level markup the formula emits flowing on the chip's single line. */
 .base-board-chip-value--formula,

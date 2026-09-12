@@ -1,6 +1,7 @@
 import {
   BasesEntry,
   BasesPropertyId,
+  BooleanValue,
   DateValue,
   LinkValue,
   ListValue,
@@ -311,6 +312,7 @@ export class CardManager {
       displayName: string;
       display: string;
       val: Value;
+      isCheckbox: boolean;
     }
 
     const chips: ChipDescriptor[] = [];
@@ -324,15 +326,21 @@ export class CardManager {
       if (propName === ORDER_PROPERTY) continue;
 
       const val = entry.getValue(propId);
-      if (!val || val instanceof NullValue || !val.isTruthy()) continue;
+      if (!val || val instanceof NullValue) continue;
+      // Checkbox properties are meaningful in both states, so an unchecked
+      // (false) box must still render as a chip instead of being treated
+      // like an empty/falsy value.
+      const isCheckbox = val instanceof BooleanValue;
+      if (!isCheckbox && !val.isTruthy()) continue;
       const display = formatValueForChip(val);
-      if (!display) continue;
+      if (!isCheckbox && !display) continue;
 
       chips.push({
         propId,
         displayName: this.view.config.getDisplayName(propId),
         display,
         val,
+        isCheckbox,
       });
     }
 
@@ -340,8 +348,7 @@ export class CardManager {
 
     // Render visible chips.
     for (let i = 0; i < chips.length && i < CHIP_VISIBLE; i++) {
-      const { displayName, display, propId, val } = chips[i];
-      this.renderChip(propsEl, displayName, display, propId, val);
+      this.renderCardChip(propsEl, chips[i], filePath);
     }
 
     // Overflow chips (if any) go into a collapsible container.
@@ -352,8 +359,7 @@ export class CardManager {
           cls: "base-board-card-chips-overflow",
         });
       }
-      const { displayName, display, propId, val } = chips[i];
-      this.renderChip(overflowEl, displayName, display, propId, val);
+      this.renderCardChip(overflowEl, chips[i], filePath);
     }
 
     // ---- Expand toggle when chips exceed visible threshold ----
@@ -384,10 +390,13 @@ export class CardManager {
       })
       .map((propId) => {
         const value = entry.getValue(propId);
+        const isCheckbox = value instanceof BooleanValue;
         return [
           propId,
           this.view.config.getDisplayName(propId),
-          value && !(value instanceof NullValue) && value.isTruthy()
+          value &&
+          !(value instanceof NullValue) &&
+          (isCheckbox || value.isTruthy())
             ? formatValueForChip(value)
             : "",
         ];
@@ -428,6 +437,80 @@ export class CardManager {
       tags,
       tagColors: this.view.tags.getColors(),
     });
+  }
+
+  /** Dispatch a chip descriptor to the checkbox or plain-text chip renderer. */
+  private renderCardChip(
+    parent: HTMLElement,
+    chip: {
+      propId: string;
+      displayName: string;
+      display: string;
+      val: Value;
+      isCheckbox: boolean;
+    },
+    filePath: string,
+  ): HTMLElement {
+    const { propId, displayName, display, val, isCheckbox } = chip;
+    if (isCheckbox) {
+      // Only real frontmatter properties (note.*) can be toggled — a
+      // formula-computed boolean has nowhere to write the new value.
+      const editable = propId.startsWith("note.");
+      return this.renderCheckboxChip(
+        parent,
+        displayName,
+        val.isTruthy(),
+        propId,
+        filePath,
+        editable,
+      );
+    }
+    return this.renderChip(parent, displayName, display, propId, val);
+  }
+
+  /** Render a checkbox-property chip; clicking it toggles the frontmatter value. */
+  private renderCheckboxChip(
+    parent: HTMLElement,
+    label: string,
+    checked: boolean,
+    propId: string,
+    filePath: string,
+    editable: boolean,
+  ): HTMLElement {
+    const chip = parent.createSpan({
+      cls: "base-board-card-chip base-board-card-chip--checkbox",
+    });
+    chip.setAttr("data-property-id", propId);
+
+    const checkboxEl = chip.createEl("input", {
+      cls: "base-board-card-checkbox",
+      attr: { type: "checkbox" },
+    });
+    checkboxEl.checked = checked;
+    checkboxEl.disabled = !editable;
+
+    chip.createSpan({ text: label, cls: "base-board-chip-label" });
+
+    // Stop clicks from bubbling to the card (which opens the note).
+    chip.addEventListener("click", (e) => e.stopPropagation());
+
+    if (editable) {
+      checkboxEl.addEventListener("change", () => {
+        const propName = propId.startsWith("note.") ? propId.slice(5) : propId;
+        if (propName === "__proto__" || propName === "constructor") return;
+        const file = this.view.app.vault.getAbstractFileByPath(filePath);
+        if (!(file instanceof TFile)) return;
+        const newValue = checkboxEl.checked;
+        void this.view.app.fileManager.processFrontMatter(
+          file,
+          (fm: Record<string, unknown>) => {
+            fm[propName] = newValue;
+          },
+        );
+      });
+    }
+
+    return chip;
   }
 
   /** Create a single chip span with label + value inside the given parent. */
