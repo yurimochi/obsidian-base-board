@@ -47,9 +47,9 @@ You can customize the default click behavior (e.g. to always open in a floating 
 
 Base Board uses manual drag order so cards remain exactly where you place them. This order is stored in each note's `kanban_order` property and overrides the native Bases **Sort by** setting.
 
-### Default Card Properties (`newItemProperties`)
+### Customizing New Cards (`newItemFolder`, `newItemTemplate`, `newItemProperties`)
 
-You can set board-specific default frontmatter properties for new cards created from **"+ Add card"** using `newItemProperties` in your `.base` file:
+Cards created from **"+ Add card"** can be customized per board via your `.base` file:
 
 ```yaml
 views:
@@ -62,7 +62,11 @@ views:
       category: alpha
 ```
 
-This ensures new cards automatically receive required frontmatter fields, keeping them visible on filtered boards.
+- **`newItemFolder`** — creates new cards inside this folder (relative to the vault root), creating it if it doesn't exist yet. Make sure your board's filter actually matches files in that folder, or the new card will immediately disappear from the board.
+- **`newItemTemplate`** — path to a note used as the starting point for new cards: its frontmatter and body content (headings, checklists, etc.) are applied to every new card. Supports the same placeholders as Obsidian's core Templates plugin: `{{title}}`, `{{date}}` / `{{date:FORMAT}}`, and `{{time}}` / `{{time:FORMAT}}`.
+- **`newItemProperties`** — default frontmatter properties merged into every new card.
+
+Precedence when several of these set the same property: the board's own values always win — `newItemTemplate` frontmatter is applied first, then `newItemProperties`, then the column's groupBy value and `kanban_order` — so a template can supply sensible defaults without breaking the board's own bookkeeping fields.
 
 ## Installation
 

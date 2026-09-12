@@ -13,6 +13,9 @@ import {
   Value,
   Keymap,
   Platform,
+  getFrontMatterInfo,
+  moment,
+  parseYaml,
 } from "obsidian";
 import { KanbanView } from "./kanban-view";
 import { ORDER_PROPERTY, sanitizeFilename } from "./constants";
@@ -731,7 +734,19 @@ export class CardManager {
       return;
     }
 
+    const templatePath = this.view.config?.get("newItemTemplate") as
+      string | undefined;
+    const template = templatePath
+      ? await this.loadTemplate(templatePath, title)
+      : null;
+
     const overrides = (fm: Record<string, unknown>) => {
+      if (template) {
+        for (const key of Object.keys(template.frontmatter)) {
+          if (key === "__proto__" || key === "constructor") continue;
+          fm[key] = template.frontmatter[key];
+        }
+      }
       const newItemProps = this.view.config?.get("newItemProperties");
       if (newItemProps && typeof newItemProps === "object") {
         const props = newItemProps as Record<string, unknown>;
@@ -745,11 +760,123 @@ export class CardManager {
       fm[ORDER_PROPERTY] = targetOrder;
     };
 
+    const folder = (
+      this.view.config?.get("newItemFolder") as string | undefined
+    )
+      ?.replace(/^\/+|\/+$/g, "")
+      .trim();
+
     try {
-      await this.view.createFileForView(title, overrides);
+      if (template?.body || folder) {
+        const filePromise = this.waitForNextFileCreated();
+        await this.view.createFileForView(title, overrides);
+        const file = await filePromise;
+        if (file) {
+          if (template?.body) {
+            const body = template.body;
+            await this.view.app.vault.process(
+              file,
+              (data) => `${data}\n${body}`,
+            );
+          }
+          if (folder) {
+            await this.moveToFolder(file, folder);
+          }
+        }
+      } else {
+        await this.view.createFileForView(title, overrides);
+      }
     } catch (err) {
       new Notice(`Failed to create card: ${String(err)}`);
     }
+  }
+
+  /** Move a freshly-created card into `folder` (relative to the vault root), creating it if needed. */
+  private async moveToFolder(file: TFile, folder: string): Promise<void> {
+    const targetPath = `${folder}/${file.name}`;
+    if (targetPath === file.path) return;
+    if (!this.view.app.vault.getAbstractFileByPath(folder)) {
+      await this.view.app.vault.createFolder(folder);
+    }
+    await this.view.app.fileManager.renameFile(file, targetPath);
+  }
+
+  /**
+   * Read a template note's frontmatter and body, resolving the same
+   * {{title}}/{{date}}/{{time}} placeholders as Obsidian's core Templates
+   * plugin. Frontmatter values are applied before the board's own overrides
+   * (groupBy value, newItemProperties, kanban_order), so the board's
+   * configuration always wins over the template's defaults.
+   */
+  private async loadTemplate(
+    templatePath: string,
+    title: string,
+  ): Promise<{ frontmatter: Record<string, unknown>; body: string } | null> {
+    const file = this.view.app.vault.getAbstractFileByPath(templatePath);
+    if (!file || !(file instanceof TFile)) {
+      new Notice(`Template not found: "${templatePath}"`);
+      return null;
+    }
+
+    const raw = await this.view.app.vault.cachedRead(file);
+    const info = getFrontMatterInfo(raw);
+    const rawFrontmatter = info.exists
+      ? ((parseYaml(info.frontmatter) as Record<string, unknown>) ?? {})
+      : {};
+
+    const frontmatter: Record<string, unknown> = {};
+    for (const key of Object.keys(rawFrontmatter)) {
+      if (key === "__proto__" || key === "constructor") continue;
+      const value = rawFrontmatter[key];
+      frontmatter[key] =
+        typeof value === "string"
+          ? this.resolveTemplateVariables(value, title)
+          : value;
+    }
+
+    const body = this.resolveTemplateVariables(
+      raw.slice(info.contentStart),
+      title,
+    );
+
+    return { frontmatter, body };
+  }
+
+  private resolveTemplateVariables(text: string, title: string): string {
+    // Obsidian's own `moment` export types as a namespace rather than the
+    // callable moment.js default export, so it needs a cast to invoke.
+    const momentFn = moment as unknown as (...args: unknown[]) => {
+      format(fmt: string): string;
+    };
+    return text
+      .replace(/\{\{title\}\}/gi, title)
+      .replace(/\{\{date(?::([^}]+))?\}\}/gi, (_match, fmt?: string) =>
+        momentFn().format(fmt || "YYYY-MM-DD"),
+      )
+      .replace(/\{\{time(?::([^}]+))?\}\}/gi, (_match, fmt?: string) =>
+        momentFn().format(fmt || "HH:mm"),
+      );
+  }
+
+  /** Resolve with the next .md file the vault reports as created, or null after a short timeout. */
+  private waitForNextFileCreated(): Promise<TFile | null> {
+    return new Promise((resolve) => {
+      // Typed as the generic Events shape (rather than the more specific
+      // `(file: TAbstractFile) => any` the 'create' overload of `on` wants)
+      // because Vault.off() only declares that generic signature.
+      const handler = (...data: unknown[]) => {
+        const file = data[0];
+        if (!(file instanceof TFile) || file.extension !== "md") return;
+        window.clearTimeout(timeout);
+        this.view.app.vault.off("create", handler);
+        resolve(file);
+      };
+      const timeout = window.setTimeout(() => {
+        this.view.app.vault.off("create", handler);
+        resolve(null);
+      }, 5000);
+      this.view.app.vault.on("create", handler);
+    });
   }
 
   // ---------------------------------------------------------------------------
