@@ -4,6 +4,7 @@ import {
   BasesEntryGroup,
   BasesAllOptions,
   BooleanValue,
+  DateValue,
   HoverParent,
   HoverPopover,
   NumberValue,
@@ -490,17 +491,55 @@ export class KanbanView extends BasesView implements HoverParent {
       this.getColumnName(g.key),
     );
 
-    if (stored && stored.length > 0) {
-      const result = [...stored];
-      for (const col of dataColumns) {
-        if (!result.includes(col)) {
-          result.push(col);
-        }
-      }
-      return result;
-    }
+    const result =
+      stored && stored.length > 0
+        ? [...stored, ...dataColumns.filter((col) => !stored.includes(col))]
+        : dataColumns;
 
-    return dataColumns;
+    // A board grouped by a date property should always read in calendar
+    // order. Without this, a manually reordered/renamed column list (or one
+    // that simply predates a newly-appearing date) would otherwise pile up
+    // new dates at the end instead of slotting them in chronologically.
+    return this.isGroupByDate()
+      ? this.sortDateColumns(result, dataColumns)
+      : result;
+  }
+
+  /** True when the groupBy property yields DateValue group keys. */
+  private isGroupByDate(): boolean {
+    return this.currentGroups.some((g) => g.key instanceof DateValue);
+  }
+
+  /** Parse a column name back into a comparable timestamp, or NaN if it isn't one. */
+  private dateColumnTimestamp(columnName: string): number {
+    return columnName === NO_VALUE_COLUMN ? NaN : Date.parse(columnName);
+  }
+
+  /**
+   * Sort columns chronologically, keeping "(No value)" last. Direction
+   * (ascending vs descending) is inferred from the live, Bases-native
+   * `dataColumns` order rather than reaching into Bases' internal groupBy
+   * config shape.
+   */
+  private sortDateColumns(columns: string[], dataColumns: string[]): string[] {
+    const timestamps = dataColumns
+      .map((col) => this.dateColumnTimestamp(col))
+      .filter((ts) => !Number.isNaN(ts));
+    const descending =
+      timestamps.length >= 2 &&
+      timestamps[0] > timestamps[timestamps.length - 1];
+
+    const withoutNoValue = columns.filter((c) => c !== NO_VALUE_COLUMN);
+    withoutNoValue.sort((a, b) => {
+      const tsA = this.dateColumnTimestamp(a);
+      const tsB = this.dateColumnTimestamp(b);
+      if (Number.isNaN(tsA) || Number.isNaN(tsB)) return 0;
+      return descending ? tsB - tsA : tsA - tsB;
+    });
+
+    return columns.includes(NO_VALUE_COLUMN)
+      ? [...withoutNoValue, NO_VALUE_COLUMN]
+      : withoutNoValue;
   }
 
   public getCollapsedColumns(): Record<string, boolean> {
